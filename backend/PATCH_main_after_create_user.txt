@@ -1,0 +1,78 @@
+# --- PATCH: Admin Users CRUD ---
+# Add below the existing create_user() in main.py
+
+@app.get("/api/admin/users")
+@jwt_required()
+def list_users():
+    claims = get_jwt()
+    if claims.get("role") not in ("ADMIN","GERENTE"):
+        return jsonify({"error":"forbidden"}), 403
+    db = SessionLocal()
+    try:
+        q = select(User).order_by(User.created_at.desc() if hasattr(User, 'created_at') else User.id.desc())
+        # Gerente só vê usuários da própria loja
+        if claims.get("role") == "GERENTE" and claims.get("store_id"):
+            q = q.where(User.store_id == claims.get("store_id"))
+        items = db.execute(q).scalars().all()
+        return jsonify([{
+            "id":u.id,"name":u.name,"email":u.email,"role":u.role,
+            "lock_loja":u.lock_loja,"store_id":u.store_id
+        } for u in items])
+    finally:
+        db.close()
+
+@app.put("/api/admin/users/<int:uid>")
+@jwt_required()
+def update_user(uid):
+    claims = get_jwt()
+    if claims.get("role") not in ("ADMIN","GERENTE"):
+        return jsonify({"error":"forbidden"}), 403
+    data = request.get_json(force=True)
+    db = SessionLocal()
+    try:
+        u = db.get(User, uid)
+        if not u:
+            return jsonify({"error":"not found"}), 404
+        # Gerente só pode editar dentro da sua loja
+        if claims.get("role") == "GERENTE" and (u.store_id != claims.get("store_id")):
+            return jsonify({"error":"forbidden"}), 403
+        u.name = data.get("name", u.name).strip()
+        new_email = data.get("email", u.email).strip().lower()
+        if new_email != u.email:
+            # check uniqueness
+            exists = db.execute(select(User).where(User.email==new_email, User.id!=u.id)).scalar_one_or_none()
+            if exists:
+                return jsonify({"error":"email já existe"}), 400
+            u.email = new_email
+        new_role = data.get("role", u.role)
+        u.role = new_role
+        u.store_id = data.get("store_id", u.store_id)
+        # regra lock_loja: se tiver store_id, trava; se None e role=ADMIN -> libera
+        u.lock_loja = True if u.store_id else False
+        # senha opcional
+        if data.get("password"):
+            u.password_hash = hash_password(data["password"])
+        db.commit()
+        return jsonify({"ok": True})
+    finally:
+        db.close()
+
+@app.delete("/api/admin/users/<int:uid>")
+@jwt_required()
+def delete_user(uid):
+    claims = get_jwt()
+    if claims.get("role") not in ("ADMIN","GERENTE"):
+        return jsonify({"error":"forbidden"}), 403
+    db = SessionLocal()
+    try:
+        u = db.get(User, uid)
+        if not u:
+            return jsonify({"error":"not found"}), 404
+        # Gerente só pode excluir da sua loja e não pode excluir ADMIN
+        if claims.get("role") == "GERENTE":
+            if u.store_id != claims.get("store_id") or u.role == "ADMIN":
+                return jsonify({"error":"forbidden"}), 403
+        db.delete(u); db.commit()
+        return jsonify({"ok": True})
+    finally:
+        db.close()

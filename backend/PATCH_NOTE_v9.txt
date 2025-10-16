@@ -1,0 +1,5 @@
+# Changes in main.py
+- Added GIFT_NAME = "1 Kg de Vela Palito"
+- WhatsApp text uses emojis that render broadly (🙂 ❤️ 🎉 🎁 ⏳)
+- Message includes gift name and meta visits (10)
+- Seed creates stores with meta_visitas=10

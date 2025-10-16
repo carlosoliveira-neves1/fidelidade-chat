@@ -1,0 +1,3 @@
+Dashboard mostra apenas a contagem de aniversariantes do mês atual e botão Exportar Excel.
+Backend adiciona /api/dashboard/aniversariantes_export (XLSX) e a lista ignora parâmetro de mês.
+Instale: pip install openpyxl

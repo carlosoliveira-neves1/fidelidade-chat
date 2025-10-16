@@ -1,0 +1,181 @@
+# --- only the blocks with role checks changed to ADMIN-only ---
+# This file is a drop-in replacement for backend/src/main.py from v14.
+
+import os
+from datetime import datetime, timedelta, date
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt, get_jwt_identity
+from sqlalchemy import func, select, delete
+from sqlalchemy.exc import IntegrityError
+from dotenv import load_dotenv
+from urllib.parse import quote
+
+from .db import Base, engine, SessionLocal
+from .models import User, Store, Client, Visit, Redemption
+from .util import hash_password, verify_password
+from . import emailer
+
+load_dotenv()
+
+app = Flask(__name__)
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY","change")
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY","change")
+app.config["JSON_SORT_KEYS"] = False
+
+CORS(app)
+jwt = JWTManager(app)
+
+STORE_NAMES = [
+    "Mega Loja – Jabaquara",
+    "Mascote",
+    "Indianopolis",
+    "Tatuape",
+    "Praia Grande",
+    "Bertioga",
+    "Osasco",
+]
+
+GIFT_NAME = os.getenv("GIFT_NAME", "1 Kg de Vela Palito")
+DEFAULT_META = int(os.getenv("DEFAULT_META", "10"))
+
+def current_user():
+    identity = get_jwt_identity()
+    if not identity:
+        return None
+    db = SessionLocal()
+    try:
+        return db.get(User, int(identity))
+    finally:
+        db.close()
+
+# -------------------- Auth --------------------
+@app.post("/api/auth/login")
+def login():
+    data = request.get_json(force=True)
+    email = data.get("email","").strip().lower()
+    password = data.get("password","")
+    db = SessionLocal()
+    try:
+        user = db.execute(select(User).where(User.email==email)).scalar_one_or_none()
+        if not user or not verify_password(password, user.password_hash):
+            return jsonify({"error":"Credenciais inválidas"}), 401
+        claims = {"role": user.role, "lock_loja": user.lock_loja, "store_id": user.store_id}
+        token = create_access_token(identity=str(user.id), additional_claims=claims, expires_delta=timedelta(hours=8))
+        return jsonify({"token": token, "user": {
+            "id":user.id,"name":user.name,"email":user.email,"role":user.role,"lock_loja":user.lock_loja,"store_id":user.store_id
+        }})
+    finally:
+        db.close()
+
+@app.get("/api/auth/me")
+@jwt_required()
+def me():
+    user = current_user()
+    if not user: return jsonify({"error":"not found"}), 404
+    return jsonify({"id":user.id,"name":user.name,"email":user.email,"role":user.role,"lock_loja":user.lock_loja,"store_id":user.store_id})
+
+# -------------------- Admin (ADMIN somente) --------------------
+@app.get("/api/admin/stores")
+@jwt_required()
+def list_stores():
+    claims = get_jwt()
+    if claims.get("role") != "ADMIN":
+        return jsonify({"error":"forbidden"}), 403
+    db = SessionLocal()
+    try:
+        stores = db.execute(select(Store)).scalars().all()
+        return jsonify([{"id":s.id,"name":s.name,"meta_visitas":s.meta_visitas} for s in stores])
+    finally:
+        db.close()
+
+@app.post("/api/admin/users")
+@jwt_required()
+def create_user():
+    claims = get_jwt()
+    if claims.get("role") != "ADMIN":
+        return jsonify({"error":"forbidden"}), 403
+    data = request.get_json(force=True)
+    db = SessionLocal()
+    try:
+        store_id = data.get("store_id")
+        lock_loja = True if store_id else False
+        u = User(
+            name=data.get("name","").strip(),
+            email=data.get("email","").strip().lower(),
+            password_hash=hash_password(data.get("password","")),
+            role=data.get("role","ATENDENTE"),
+            lock_loja=lock_loja,
+            store_id=store_id
+        )
+        db.add(u); db.commit()
+        return jsonify({"id":u.id,"name":u.name,"email":u.email,"role":u.role,"lock_loja":u.lock_loja,"store_id":u.store_id}), 201
+    except IntegrityError:
+        db.rollback()
+        return jsonify({"error":"email já existe"}), 400
+    finally:
+        db.close()
+
+@app.get("/api/admin/users")
+@jwt_required()
+def list_users():
+    claims = get_jwt()
+    if claims.get("role") != "ADMIN":
+        return jsonify({"error":"forbidden"}), 403
+    db = SessionLocal()
+    try:
+        q = select(User).order_by(User.id.desc())
+        items = db.execute(q).scalars().all()
+        return jsonify([{
+            "id":u.id,"name":u.name,"email":u.email,"role":u.role,
+            "lock_loja":u.lock_loja,"store_id":u.store_id
+        } for u in items])
+    finally:
+        db.close()
+
+@app.put("/api/admin/users/<int:uid>")
+@jwt_required()
+def update_user(uid):
+    claims = get_jwt()
+    if claims.get("role") != "ADMIN":
+        return jsonify({"error":"forbidden"}), 403
+    data = request.get_json(force=True)
+    db = SessionLocal()
+    try:
+        u = db.get(User, uid)
+        if not u:
+            return jsonify({"error":"not found"}), 404
+        u.name = data.get("name", u.name).strip()
+        new_email = data.get("email", u.email).strip().lower()
+        if new_email != u.email:
+            exists = db.execute(select(User).where(User.email==new_email, User.id!=u.id)).scalar_one_or_none()
+            if exists:
+                return jsonify({"error":"email já existe"}), 400
+            u.email = new_email
+        u.role = data.get("role", u.role)
+        u.store_id = data.get("store_id", u.store_id)
+        u.lock_loja = True if u.store_id else False
+        if data.get("password"):
+            u.password_hash = hash_password(data["password"])
+        db.commit()
+        return jsonify({"ok": True})
+    finally:
+        db.close()
+
+@app.delete("/api/admin/users/<int:uid>")
+@jwt_required()
+def delete_user(uid):
+    claims = get_jwt()
+    if claims.get("role") != "ADMIN":
+        return jsonify({"error":"forbidden"}), 403
+    db = SessionLocal()
+    try:
+        u = db.get(User, uid)
+        if not u:
+            return jsonify({"error":"not found"}), 404
+        db.delete(u); db.commit()
+        return jsonify({"ok": True})
+    finally:
+        db.close()
+
+# ---- (restante do main igual ao v14; mantenha seu arquivo v14 e apenas aplique essas mudanças nas rotas /api/admin/*) ----

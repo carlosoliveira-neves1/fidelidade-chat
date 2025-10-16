@@ -1,0 +1,31 @@
+# -------- WhatsApp (UNICODE + percent-encode) --------
+from urllib.parse import quote
+
+wa = None
+if c.phone:
+    digits = _format_phone_to_wa(c.phone)
+    if digits:
+        primeiro_nome = (c.name or "cliente").strip().split()[0]
+        HEART     = "\u2764\uFE0F"   # ❤️
+        PARTY     = "\U0001F389"     # 🎉
+        GIFT      = "\U0001F381"     # 🎁
+        HOURGLASS = "\u23F3"         # ⏳
+
+        if eligible:
+            msg = (
+                f"Oi, *{primeiro_nome}*! Obrigado por confiar na Casa do Cigano.\n"
+                f"Esperamos que você ame seu novo produto! {HEART}\n"
+                f"Você está participando do nosso programa de fidelidade *CiganoLovers* e você tem *{int(count_visits)}* visita(s) — "
+                f"{PARTY} *já pode resgatar seu brinde!* {GIFT}\n"
+                f"Brinde: *{GIFT_NAME}* (meta *{int(meta)}* visitas).\n"
+                "Confira as novidades em nossa loja: https://www.casadocigano.com.br/"
+            )
+        else:
+            msg = (
+                f"Oi, *{primeiro_nome}*! Obrigado por confiar na Casa do Cigano.\n"
+                f"Esperamos que você ame seu novo produto! {HEART}\n"
+                f"Você está participando do nosso programa de fidelidade *CiganoLovers* e você tem *{int(count_visits)}* visita(s).\n"
+                f"{HOURGLASS} Faltam *{int(faltam)}* visita(s) para o brinde *{GIFT_NAME}* (meta *{int(meta)}* visitas).\n"
+                "Confira as novidades em nossa loja: https://www.casadocigano.com.br/"
+            )
+        wa = f"https://wa.me/{digits}?text=" + quote(msg, safe="", encoding="utf-8")

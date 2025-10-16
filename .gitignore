@@ -1,0 +1,42 @@
+@"
+# --- Root ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Env files (não subir) ---
+.env
+.env.*
+*.env
+
+# --- Frontend ---
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.env
+/frontend/.env.*
+# manter o package-lock (útil p/ build determinístico)
+!frontend/package-lock.json
+
+# --- Backend ---
+/backend/.venv/
+/backend/venv/
+/backend/__pycache__/
+/backend/.pytest_cache/
+/backend/*.pyc
+/backend/instance/
+/backend/db.sqlite3
+/backend/.env
+"@ | Out-File -Encoding utf8 .gitignore}
+
+# Python
+__pycache__/
+*.pyc
+
+# Virtual envs
+backend/.venv/
+.venv/
+
+# IDE
+.vscode/
+

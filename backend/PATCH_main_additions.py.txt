@@ -1,0 +1,51 @@
+# --- PATCH: Exportar aniversariantes do mês atual em XLSX ---
+from io import BytesIO
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
+
+@app.get("/api/dashboard/aniversariantes_export")
+@jwt_required()
+def birthday_export():
+    user = current_user()
+    db = SessionLocal()
+    try:
+        mes = datetime.utcnow().month
+        q = select(Client, Store.name).join(Store, Store.id==Client.store_id, isouter=True)\
+            .where(func.extract('month', Client.birthday)==mes)
+        if user.lock_loja and user.store_id:
+            q = q.where(Client.store_id == user.store_id)
+        rows = db.execute(q).all()
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Aniversariantes"
+        ws.append(["Nome", "CPF", "Nascimento", "Loja"])
+        for (c, store_name) in rows:
+            ws.append([c.name, c.cpf, c.birthday.isoformat() if c.birthday else "", store_name or ""])
+        # largura de colunas
+        for i, w in enumerate([30, 16, 14, 20], start=1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+        buf = BytesIO()
+        wb.save(buf); buf.seek(0)
+        fname = f"aniversariantes_{datetime.utcnow().year}_{mes:02d}.xlsx"
+        from flask import send_file
+        return send_file(buf, as_attachment=True, download_name=fname, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    finally:
+        db.close()
+
+# Ajuste: a lista de aniversariantes passa a usar SEMPRE o mês atual (ignora query param, por simplicidade)
+@app.get("/api/dashboard/aniversariantes")
+@jwt_required()
+def birthday_list():
+    user = current_user()
+    mes = datetime.utcnow().month
+    db = SessionLocal()
+    try:
+        q = select(Client).where(func.extract('month', Client.birthday)==mes)
+        if user.lock_loja and user.store_id:
+            q = q.where(Client.store_id == user.store_id)
+        items = db.execute(q).scalars().all()
+        return jsonify([{"id":c.id,"name":c.name,"cpf":c.cpf,"birthday": c.birthday.isoformat() if c.birthday else None} for c in items])
+    finally:
+        db.close()
