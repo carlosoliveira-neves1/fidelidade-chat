@@ -1,70 +1,52 @@
-# backend/src/db.py
-
 import os
-from urllib.parse import quote_plus
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session, declarative_base
 
-
-def _build_url_from_parts() -> str | None:
-    """
-    Monta a URL do Postgres a partir das variáveis:
-      DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
-    Retorna None se faltar algum campo essencial.
-    """
-    host = os.getenv("DB_HOST")
-    name = os.getenv("DB_NAME")
-    user = os.getenv("DB_USER")
-    pwd  = os.getenv("DB_PASSWORD")
-    port = os.getenv("DB_PORT", "5432")
-
-    if not all([host, name, user, pwd]):
-        return None
-
-    # Escapa user/senha para caracteres especiais
-    user_q = quote_plus(user)
-    pwd_q  = quote_plus(pwd)
-
-    # Usa psycopg (v3)
-    return f"postgresql+psycopg://{user_q}:{pwd_q}@{host}:{port}/{name}"
-
-
-# 1) Pega DATABASE_URL se já existir
+# -----------------------------
+# Preferência: usar DB_* e montar a URL
+# (Se DATABASE_URL estiver setado, ele será usado diretamente)
+# -----------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# 2) Se não existir, tenta montar a partir de DB_*
 if not DATABASE_URL:
-    DATABASE_URL = _build_url_from_parts()
+    DB_USER = os.getenv("DB_USER", "")
+    DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+    DB_HOST = os.getenv("DB_HOST", "")
+    DB_PORT = os.getenv("DB_PORT", "5432")
+    DB_NAME = os.getenv("DB_NAME", "")
 
-# 3) Se vier com 'postgresql://' troca para 'postgresql+psycopg://'
-if DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
-    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+    if DB_HOST and DB_NAME and DB_USER:
+        # psycopg3 driver
+        # sslmode=require é comum em provedores; se sua instância não exigir, pode remover.
+        DATABASE_URL = (
+            f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}"
+            f"@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require"
+        )
+    else:
+        # Fallback local (para dev) — NÃO usado no Render
+        DATABASE_URL = "sqlite:///db.sqlite3"
 
-# 4) Schema (opcional). No Postgres, definimos via search_path.
-DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA")
+# Schema para o Postgres
+DATABASE_SCHEMA = os.getenv("DB_SCHEMA") or os.getenv("DATABASE_SCHEMA") or ""
 
 connect_args = {}
 if DATABASE_SCHEMA:
-    # Define o search_path no Postgres para criar/usar tabelas nesse schema
+    # Define o search_path para criar/usar as tabelas no schema desejado
     connect_args["options"] = f"-csearch_path={DATABASE_SCHEMA}"
 
-# 5) Fallback local (dev) para SQLite, se nada de Postgres foi informado
-if not DATABASE_URL:
-    DATABASE_URL = "sqlite:///db.sqlite3"
-    connect_args = {}  # SQLite não usa essas opções
-
-# 6) Cria o engine
+# Engine
 engine = create_engine(
     DATABASE_URL,
     future=True,
     echo=False,
     connect_args=connect_args,
-    pool_pre_ping=True,   # evita conexões quebradas
-    pool_recycle=1800,    # recicla conexões a cada 30 min
+    pool_pre_ping=True,
 )
 
-# 7) Session/Base
+# Session
 SessionLocal = scoped_session(
     sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 )
+
+# Base
 Base = declarative_base()

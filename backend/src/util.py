@@ -1,8 +1,7 @@
-# util.py — usar PBKDF2 (compatível no Windows) em vez de bcrypt
-from passlib.hash import pbkdf2_sha256
+import bcrypt
 
-def hash_password(p: str) -> str:
-    return pbkdf2_sha256.hash(p)
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
-def verify_password(p: str, hashed: str) -> bool:
-    return pbkdf2_sha256.verify(p, hashed)
+def verify_password(password: str, hashed: str) -> bool:
+    return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
