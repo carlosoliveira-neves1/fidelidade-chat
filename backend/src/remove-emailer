@@ -1,0 +1,74 @@
+*** a/backend/src/main.py
+--- b/backend/src/main.py
+@@
+-# (caso exista) import do emailer
+-try:
+-    import src.emailer as emailer  # noqa: F401
+-except Exception:
+-    emailer = None  # type: ignore
++# Removido envio de e-mail no fluxo de visitas
+ 
+@@
+-@app.post("/api/visitas")
+-@jwt_required()
+-def register_visit():
++@app.post("/api/visitas")
++@jwt_required()
++def register_visit():
+     data = request.get_json(force=True) or {}
+     cpf = (data.get("cpf") or "").strip()
+     client_id = data.get("client_id")
+ 
+     db = SessionLocal()
+     try:
+         client = None
+         if cpf:
+             client = db.query(Client).filter(Client.cpf == cpf).one_or_none()
+         elif client_id:
+             client = db.get(Client, int(client_id))
+ 
+         if not client:
+             return jsonify({"error": "Cliente não encontrado"}), 404
+ 
+         store_id = client.store_id or 1
+         visit = Visit(client_id=client.id, store_id=store_id)
+         db.add(visit)
+-        db.flush()
++        db.flush()
+ 
+         visits_count = db.query(Visit).filter(Visit.client_id == client.id).count()
+-        eligible = False
+-        try:
+-            eligible = (visits_count % 10) == 0
+-        except Exception:
+-            eligible = False
++        eligible = False
++        try:
++            eligible = (visits_count % 10) == 0
++        except Exception:
++            eligible = False
+ 
+         db.commit()
+-
+-        # ===== Envio de e-mail (REMOVIDO) =====
+-        # Antes: montava `titulo`, `texto_email`, `html` e chamava:
+-        # emailer.send_email(to_email, titulo, texto_email, html)
+-        # Agora: nenhum e-mail é enviado.
+-
+-        return jsonify({
+-            "visit_id": visit.id,
+-            "visits_count": int(visits_count),
+-            "eligible": bool(eligible),
+-        }), 201
++        # Sem envio de e-mail
++        return jsonify({
++            "visit_id": visit.id,
++            "visits_count": int(visits_count),
++            "eligible": bool(eligible),
++        }), 201
+     except Exception as e:
+         db.rollback()
+         print(f"[register_visit] erro: {e}")
+         return jsonify({"error": "Falha ao registrar visita"}), 500
+     finally:
+         db.close()
