@@ -341,13 +341,22 @@ def register_visit():
         <p>{'Você <b>JÁ PODE</b> resgatar seu brinde ('+GIFT_NAME+')!' if eligible else f'Faltam <b>{faltam}</b> visita(s) para o próximo brinde ('+GIFT_NAME+').'}</p>
         <p>Obrigado pela visita!<br/>Casa do Cigano</p>
         """
+        # --- e-mail opcional: não pode quebrar a rota ---
         TEST_EMAIL_TO = os.getenv("TEST_EMAIL_TO", "").strip()
         to_email = (c.email or "").strip() or TEST_EMAIL_TO
+
         if to_email:
             try:
+                # Preferimos a assinatura nova (4 args: to, subject, text, html)
                 emailer.send_email(to_email, titulo, texto_email, html)
+            except TypeError:
+                # Se a lib no ar ainda estiver na assinatura antiga (3 args), reenvia sem HTML
+                try:
+                    emailer.send_email(to_email, titulo, texto_email)
+                except Exception:
+                    pass
             except Exception:
-                # não falha a rota por problema de e-mail
+                # Nunca deixar o envio de e-mail derrubar a requisição
                 pass
 
         wa = None
