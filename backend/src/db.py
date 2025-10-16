@@ -1,52 +1,44 @@
 import os
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, scoped_session, declarative_base
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 
-# -----------------------------
-# Preferência: usar DB_* e montar a URL
-# (Se DATABASE_URL estiver setado, ele será usado diretamente)
-# -----------------------------
-DATABASE_URL = os.getenv("DATABASE_URL")
+def _build_database_url():
+    # Preferir DATABASE_URL completa
+    url = os.getenv("DATABASE_URL")
+    if url:
+        return url
 
-if not DATABASE_URL:
-    DB_USER = os.getenv("DB_USER", "")
-    DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-    DB_HOST = os.getenv("DB_HOST", "")
-    DB_PORT = os.getenv("DB_PORT", "5432")
-    DB_NAME = os.getenv("DB_NAME", "")
+    # Fallback por partes
+    user = os.getenv("DB_USER", "")
+    pwd = os.getenv("DB_PASSWORD", "")
+    host = os.getenv("DB_HOST", "localhost")
+    port = os.getenv("DB_PORT", "5432")
+    name = os.getenv("DB_NAME", "postgres")
+    sslmode = os.getenv("DB_SSLMODE", "disable")
+    schema = os.getenv("DB_SCHEMA", None)
 
-    if DB_HOST and DB_NAME and DB_USER:
-        # psycopg3 driver
-        # sslmode=require é comum em provedores; se sua instância não exigir, pode remover.
-        DATABASE_URL = (
-            f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}"
-            f"@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require"
-        )
-    else:
-        # Fallback local (para dev) — NÃO usado no Render
-        DATABASE_URL = "sqlite:///db.sqlite3"
+    # Escapa '@' etc. se vierem sem estar encodados
+    from urllib.parse import quote
+    pwd_enc = pwd if "%" in pwd else quote(pwd, safe="")
 
-# Schema para o Postgres
-DATABASE_SCHEMA = os.getenv("DB_SCHEMA") or os.getenv("DATABASE_SCHEMA") or ""
+    url = f"postgresql+psycopg://{user}:{pwd_enc}@{host}:{port}/{name}?sslmode={sslmode}"
+    if schema:
+        from urllib.parse import urlencode, parse_qsl, urlsplit, urlunsplit, quote_plus
+        scheme, netloc, path, query, frag = urlsplit(url)
+        q = dict(parse_qsl(query))
+        q["options"] = f"-csearch_path={schema}"
+        query = urlencode(q, doseq=True, quote_via=quote_plus)
+        url = urlunsplit((scheme, netloc, path, query, frag))
 
-connect_args = {}
-if DATABASE_SCHEMA:
-    # Define o search_path para criar/usar as tabelas no schema desejado
-    connect_args["options"] = f"-csearch_path={DATABASE_SCHEMA}"
+    return url
 
-# Engine
+DATABASE_URL = _build_database_url()
+
 engine = create_engine(
     DATABASE_URL,
-    future=True,
-    echo=False,
-    connect_args=connect_args,
     pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=5,
 )
 
-# Session
-SessionLocal = scoped_session(
-    sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
-)
-
-# Base
-Base = declarative_base()
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
