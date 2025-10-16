@@ -348,7 +348,7 @@ def register_visit():
         if to_email:
             try:
                 # Preferimos a assinatura nova (4 args: to, subject, text, html)
-                emailer.send_email(to_email, titulo, texto_email, html)
+                emailer.send_email(to_email, titulo, texto_email)
             except TypeError:
                 # Se a lib no ar ainda estiver na assinatura antiga (3 args), reenvia sem HTML
                 try:
