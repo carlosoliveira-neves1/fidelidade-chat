@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime, timedelta, date
-from typing import Optional
+from urllib.parse import quote
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -51,8 +51,7 @@ GIFT_NAME = os.getenv("GIFT_NAME", "1 Kg de Vela Palito")
 DEFAULT_META = int(os.getenv("DEFAULT_META", "10"))
 
 
-# ================== HELPERS ==================
-def current_user() -> Optional[User]:
+def current_user():
     identity = get_jwt_identity()
     if not identity:
         return None
@@ -63,57 +62,7 @@ def current_user() -> Optional[User]:
         db.close()
 
 
-def parse_birthday(value) -> Optional[date]:
-    """
-    Converte o input do aniversário para date (ou None).
-    Aceita:
-      - date (já convertido pelo cliente)
-      - string YYYY-MM-DD
-      - string DD/MM/YYYY
-      - vazio/None -> None
-    """
-    if value in (None, "", "null"):
-        return None
-
-    if isinstance(value, date):
-        return value
-
-    if isinstance(value, str):
-        s = value.strip()
-        if not s:
-            return None
-        # ISO (YYYY-MM-DD)
-        try:
-            return date.fromisoformat(s)
-        except Exception:
-            pass
-        # BR (DD/MM/YYYY)
-        try:
-            return datetime.strptime(s, "%d/%m/%Y").date()
-        except Exception:
-            pass
-
-    # Se não conseguiu converter, lança um erro explícito
-    raise ValueError("Formato de data inválido para 'birthday' (use YYYY-MM-DD ou DD/MM/YYYY)")
-
-
-def _format_phone_to_wa(phone: str) -> Optional[str]:
-    if not phone:
-        return None
-    digits = "".join(ch for ch in phone if ch.isdigit())
-    if len(digits) < 10:
-        return None
-    if not digits.startswith("55"):
-        digits = "55" + digits
-    return digits
-
-
-def _require_admin() -> bool:
-    claims = get_jwt()
-    return claims.get("role") == "ADMIN"
-
-
-# ================== AUTH ==================
+# ================= AUTH =================
 @app.post("/api/auth/login")
 def login():
     data = request.get_json(force=True)
@@ -154,7 +103,12 @@ def me():
     })
 
 
-# ================= ADMIN =================
+# ================ ADMIN =================
+def _require_admin():
+    claims = get_jwt()
+    return claims.get("role") == "ADMIN"
+
+
 @app.get("/api/admin/stores")
 @jwt_required()
 def list_stores():
@@ -207,10 +161,12 @@ def list_users():
     db = SessionLocal()
     try:
         items = db.execute(select(User).order_by(User.id.desc())).scalars().all()
-        return jsonify([{
-            "id": u.id, "name": u.name, "email": u.email,
-            "role": u.role, "lock_loja": u.lock_loja, "store_id": u.store_id
-        } for u in items])
+        return jsonify([
+            {
+                "id": u.id, "name": u.name, "email": u.email,
+                "role": u.role, "lock_loja": u.lock_loja, "store_id": u.store_id
+            } for u in items
+        ])
     finally:
         db.close()
 
@@ -263,28 +219,30 @@ def delete_user(uid):
         db.close()
 
 
-# ================= CLIENTES =================
+# =============== CLIENTES ===============
 @app.post("/api/clientes")
 @jwt_required()
 def create_client():
     user = current_user()
     data = request.get_json(force=True)
-
-    # Converte o aniversário para date (ou None) aqui
-    try:
-        bday = parse_birthday(data.get("birthday"))
-    except ValueError as ex:
-        return jsonify({"error": str(ex)}), 400
-
     db = SessionLocal()
     try:
+        # normaliza birthday como string 'YYYY-MM-DD'
+        raw_bday = data.get("birthday")
+        bday_str = None
+        if raw_bday:
+            try:
+                bday_str = date.fromisoformat(str(raw_bday)).isoformat()
+            except Exception:
+                return jsonify({"error": "birthday inválido. Use YYYY-MM-DD"}), 400
+
         c = Client(
             name=data.get("name", "").strip(),
             cpf=(data.get("cpf") or "").strip(),
             phone=(data.get("phone") or "").strip(),
             email=(data.get("email") or "").strip() or None,
-            birthday=bday,  # <- date ou None
-            store_id=(data.get("store_id") or (user.store_id if user and user.store_id else None)),
+            birthday=bday_str,  # agora é string
+            store_id=(data.get("store_id") or user.store_id),
         )
         db.add(c)
         db.commit()
@@ -308,7 +266,7 @@ def list_clients():
         q = select(Client)
         if cpf:
             q = q.where(Client.cpf == cpf)
-        elif user and user.lock_loja and user.store_id:
+        elif user.lock_loja and user.store_id:
             q = q.where(Client.store_id == user.store_id)
         total = db.execute(select(func.count()).select_from(q.subquery())).scalar_one()
         items = db.execute(
@@ -320,7 +278,7 @@ def list_clients():
             "total": int(total),
             "items": [{
                 "id": c.id, "name": c.name, "cpf": c.cpf, "phone": c.phone,
-                "email": c.email, "birthday": c.birthday.isoformat() if c.birthday else None,
+                "email": c.email, "birthday": c.birthday,
                 "store_id": c.store_id,
             } for c in items],
         })
@@ -328,9 +286,19 @@ def list_clients():
         db.close()
 
 
-# ================= VISITAS =================
-from urllib.parse import quote  # usado no link do WhatsApp
+# =============== HELPERS ===============
+def _format_phone_to_wa(phone: str) -> str | None:
+    if not phone:
+        return None
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    if len(digits) < 10:
+        return None
+    if not digits.startswith("55"):
+        digits = "55" + digits
+    return digits
 
+
+# =============== VISITAS ===============
 @app.post("/api/visitas")
 @jwt_required()
 def register_visit():
@@ -343,7 +311,7 @@ def register_visit():
         if not c:
             return jsonify({"error": "Cliente não encontrado"}), 404
 
-        store_id = user.store_id or c.store_id if user else c.store_id
+        store_id = user.store_id or c.store_id
         if not store_id:
             st = db.execute(select(Store).order_by(Store.id.asc())).scalars().first()
             store_id = st.id if st else None
@@ -358,20 +326,19 @@ def register_visit():
         eligible = count_visits >= meta
         faltam = max(0, meta - count_visits)
 
-        # email
         titulo = "Sua pontuação - Programa de Fidelidade Casa do Cigano"
         texto_email = (
-            f"Olá {c.name},\n\nVocê agora tem {int(count_visits)} visita(s). Meta para brinde: {int(meta)}. "
+            f"Olá {c.name},\n\nVocê agora tem {count_visits} visita(s). Meta para brinde: {meta}. "
         )
         if eligible:
             texto_email += f"Você JÁ PODE resgatar seu brinde ({GIFT_NAME})!"
         else:
-            texto_email += f"Faltam {int(faltam)} visita(s) para o próximo brinde ({GIFT_NAME})."
+            texto_email += f"Faltam {faltam} visita(s) para o próximo brinde ({GIFT_NAME})."
         texto_email += "\n\nObrigado pela visita!"
         html = f"""
         <p>Olá <b>{c.name}</b>,</p>
-        <p>Você agora tem <b>{int(count_visits)}</b> visita(s). Meta para brinde: <b>{int(meta)}</b>.</p>
-        <p>{'Você <b>JÁ PODE</b> resgatar seu brinde ('+GIFT_NAME+')!' if eligible else f'Faltam <b>{int(faltam)}</b> visita(s) para o próximo brinde ('+GIFT_NAME+').'}</p>
+        <p>Você agora tem <b>{count_visits}</b> visita(s). Meta para brinde: <b>{meta}</b>.</p>
+        <p>{'Você <b>JÁ PODE</b> resgatar seu brinde ('+GIFT_NAME+')!' if eligible else f'Faltam <b>{faltam}</b> visita(s) para o próximo brinde ('+GIFT_NAME+').'}</p>
         <p>Obrigado pela visita!<br/>Casa do Cigano</p>
         """
         TEST_EMAIL_TO = os.getenv("TEST_EMAIL_TO", "").strip()
@@ -380,10 +347,9 @@ def register_visit():
             try:
                 emailer.send_email(to_email, titulo, texto_email, html)
             except Exception:
-                # não falha a requisição por causa de email
+                # não falha a rota por problema de e-mail
                 pass
 
-        # WhatsApp
         wa = None
         if c.phone:
             digits = _format_phone_to_wa(c.phone)
@@ -392,15 +358,17 @@ def register_visit():
                 if eligible:
                     msg = (
                         f"Oi, {primeiro_nome}! Obrigado por confiar na Casa do Cigano.\n\n"
-                        f"Você tem {int(count_visits)} visita(s) e JÁ PODE resgatar seu brinde: {GIFT_NAME} "
-                        f"(meta {int(meta)} visitas).\n\n"
+                        f"Esperamos que você ame seu novo produto!\n\n"
+                        f"Você está participando do nosso programa de fidelidade *CiganoLovers* e você tem {int(count_visits)} visita(s).\n\n"
+                        f"Você JÁ PODE resgatar seu brinde: {GIFT_NAME} (meta {int(meta)} visitas).\n\n"
                         "Confira as novidades em nossa loja: https://www.casadocigano.com.br/"
                     )
                 else:
                     msg = (
                         f"Oi, {primeiro_nome}! Obrigado por confiar na Casa do Cigano.\n\n"
-                        f"Você tem {int(count_visits)} visita(s). Faltam {int(faltam)} para o brinde "
-                        f"{GIFT_NAME} (meta {int(meta)} visitas).\n\n"
+                        f"Esperamos que você ame seu novo produto!\n\n"
+                        f"Você está participando do nosso programa de fidelidade *CiganoLovers* e você tem {int(count_visits)} visita(s).\n\n"
+                        f"Faltam {int(faltam)} visita(s) para o brinde {GIFT_NAME} (meta {int(meta)} visitas).\n\n"
                         "Confira as novidades em nossa loja: https://www.casadocigano.com.br/"
                     )
                 wa = f"https://wa.me/{digits}?text=" + quote(msg, safe="", encoding="utf-8")
@@ -420,7 +388,7 @@ def register_visit():
         db.close()
 
 
-# ================= RESGATES =================
+# =============== RESGATES ===============
 @app.post("/api/resgates")
 @jwt_required()
 def redeem_gift():
@@ -434,7 +402,7 @@ def redeem_gift():
         if not c:
             return jsonify({"error": "Cliente não encontrado"}), 404
 
-        store_id = user.store_id or c.store_id if user else c.store_id
+        store_id = user.store_id or c.store_id
         if not store_id:
             st = db.execute(select(Store).order_by(Store.id.asc())).scalars().first()
             store_id = st.id if st else None
@@ -464,7 +432,7 @@ def redeem_gift():
         db.close()
 
 
-# ================= DASHBOARD =================
+# =============== DASHBOARD ===============
 @app.get("/api/dashboard/kpis")
 @jwt_required()
 def kpis():
@@ -475,7 +443,7 @@ def kpis():
         vq = select(func.count(Visit.id)).where(Visit.created_at >= since)
         rq = select(func.count(Redemption.id)).where(Redemption.created_at >= since)
         cq = select(func.count(Client.id))
-        if user and user.lock_loja and user.store_id:
+        if user.lock_loja and user.store_id:
             vq = vq.where(Visit.store_id == user.store_id)
             rq = rq.where(Redemption.store_id == user.store_id)
             cq = cq.where(Client.store_id == user.store_id)
@@ -498,19 +466,21 @@ def birthday_list():
     mes = datetime.utcnow().month
     db = SessionLocal()
     try:
-        q = select(Client).where(func.extract("month", Client.birthday) == mes)
-        if user and user.lock_loja and user.store_id:
+        # birthday agora é VARCHAR(10) -> convertemos para DATE na query
+        month_expr = func.extract("month", func.to_date(Client.birthday, 'YYYY-MM-DD'))
+        q = select(Client).where(month_expr == mes)
+        if user.lock_loja and user.store_id:
             q = q.where(Client.store_id == user.store_id)
         items = db.execute(q).scalars().all()
         return jsonify([{
             "id": c.id, "name": c.name, "cpf": c.cpf,
-            "birthday": c.birthday.isoformat() if c.birthday else None,
+            "birthday": c.birthday,
         } for c in items])
     finally:
         db.close()
 
 
-# ================= HEALTH & SEED =================
+# =============== HEALTH & SEED ===============
 @app.get("/api/_health")
 def health_api():
     return {"status": "ok"}
@@ -546,7 +516,9 @@ def seed():
         # gerente exemplo (Mascote)
         mascote = db.execute(select(Store).where(Store.name == "Mascote")).scalar_one_or_none()
         if mascote:
-            gerente = db.execute(select(User).where(User.email == "gerente.mascote@cdc.com")).scalar_one_or_none()
+            gerente = db.execute(
+                select(User).where(User.email == "gerente.mascote@cdc.com")
+            ).scalar_one_or_none()
             if not gerente:
                 gerente = User(
                     name="Gerente Mascote", email="gerente.mascote@cdc.com",
@@ -560,7 +532,7 @@ def seed():
         db.close()
 
 
-# ================= BOOT (local) =================
+# =============== BOOT (local) ===============
 if __name__ == "__main__":
     Base.metadata.create_all(bind=engine)
     app.run(host="127.0.0.1", port=5000, debug=True)
