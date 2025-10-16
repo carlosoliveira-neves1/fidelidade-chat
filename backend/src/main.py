@@ -18,7 +18,6 @@ from dotenv import load_dotenv
 from .db import Base, engine, SessionLocal
 from .models import User, Store, Client, Visit, Redemption
 from .util import hash_password, verify_password
-from . import emailer
 
 load_dotenv()
 
@@ -326,39 +325,7 @@ def register_visit():
         eligible = count_visits >= meta
         faltam = max(0, meta - count_visits)
 
-        titulo = "Sua pontuação - Programa de Fidelidade Casa do Cigano"
-        texto_email = (
-            f"Olá {c.name},\n\nVocê agora tem {count_visits} visita(s). Meta para brinde: {meta}. "
-        )
-        if eligible:
-            texto_email += f"Você JÁ PODE resgatar seu brinde ({GIFT_NAME})!"
-        else:
-            texto_email += f"Faltam {faltam} visita(s) para o próximo brinde ({GIFT_NAME})."
-        texto_email += "\n\nObrigado pela visita!"
-        html = f"""
-        <p>Olá <b>{c.name}</b>,</p>
-        <p>Você agora tem <b>{count_visits}</b> visita(s). Meta para brinde: <b>{meta}</b>.</p>
-        <p>{'Você <b>JÁ PODE</b> resgatar seu brinde ('+GIFT_NAME+')!' if eligible else f'Faltam <b>{faltam}</b> visita(s) para o próximo brinde ('+GIFT_NAME+').'}</p>
-        <p>Obrigado pela visita!<br/>Casa do Cigano</p>
-        """
-        # --- e-mail opcional: não pode quebrar a rota ---
-        TEST_EMAIL_TO = os.getenv("TEST_EMAIL_TO", "").strip()
-        to_email = (c.email or "").strip() or TEST_EMAIL_TO
-
-        if to_email:
-            try:
-                # Preferimos a assinatura nova (4 args: to, subject, text, html)
-                emailer.send_email(to_email, titulo, texto_email)
-            except TypeError:
-                # Se a lib no ar ainda estiver na assinatura antiga (3 args), reenvia sem HTML
-                try:
-                    emailer.send_email(to_email, titulo, texto_email)
-                except Exception:
-                    pass
-            except Exception:
-                # Nunca deixar o envio de e-mail derrubar a requisição
-                pass
-
+        # --- WhatsApp (opcional) ---
         wa = None
         if c.phone:
             digits = _format_phone_to_wa(c.phone)
