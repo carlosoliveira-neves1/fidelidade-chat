@@ -11,7 +11,7 @@ from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required,
     get_jwt, get_jwt_identity
 )
-from sqlalchemy import func, select, delete
+from sqlalchemy import func, select, delete, desc
 from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
 
@@ -364,6 +364,32 @@ def register_visit():
         db.close()
 
 
+@app.get("/api/visitas")
+@jwt_required()
+def list_visits():
+    """Lista visitas paginadas (mais recentes primeiro)."""
+    page = int(request.args.get("page", 1))
+    per_page = int(request.args.get("per_page", 10))
+    db = SessionLocal()
+    try:
+        q = select(Visit).order_by(desc(Visit.created_at))
+        total = db.execute(select(func.count()).select_from(q.subquery())).scalar_one()
+        items = db.execute(q.offset((page - 1) * per_page).limit(per_page)).scalars().all()
+        return jsonify({
+            "total": int(total),
+            "items": [
+                {
+                    "id": v.id,
+                    "client_id": v.client_id,
+                    "store_id": v.store_id,
+                    "created_at": v.created_at.isoformat()
+                } for v in items
+            ]
+        })
+    finally:
+        db.close()
+
+
 # =============== RESGATES ===============
 @app.post("/api/resgates")
 @jwt_required()
@@ -442,7 +468,7 @@ def birthday_list():
     mes = datetime.utcnow().month
     db = SessionLocal()
     try:
-        # birthday agora é VARCHAR(10) -> convertemos para DATE na query
+        # birthday é VARCHAR(10) -> convertemos para DATE na query
         month_expr = func.extract("month", func.to_date(Client.birthday, 'YYYY-MM-DD'))
         q = select(Client).where(month_expr == mes)
         if user.lock_loja and user.store_id:
